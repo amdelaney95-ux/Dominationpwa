@@ -32,7 +32,7 @@
  * opaque — unreadable status, unknown size — and they are cached anyway, because
  * an opaque response replays perfectly well even though it cannot be inspected.
  */
-const VERSION = '64d0c9ef4c32';
+const VERSION = 'c48ed4c8682b';
 const SHELL_CACHE = `dominion-shell-${VERSION}`;
 const FONT_CACHE = 'dominion-fonts';
 const SHELL = [

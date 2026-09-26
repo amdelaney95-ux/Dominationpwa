@@ -515,9 +515,32 @@ input[type=range]{width:100%;accent-color:var(--brass)}
 .field input,.field select{width:100%;padding:9px 11px;background:var(--inset);
   color:var(--sand);border:1px solid var(--chart-line);font-family:var(--font-body);font-size:14px}
 .opponents{display:flex;flex-direction:column;gap:8px}
+.names{display:flex;flex-direction:column;gap:8px}
+.name-row{display:flex;align-items:center;gap:10px}
+.seat-swatch{width:12px;height:12px;border-radius:2px;flex-shrink:0;background:var(--no-owner)}
 .opponent{display:flex;align-items:center;gap:11px}
 .opponent .tag{font-family:var(--font-data);font-size:11px;color:var(--sand-dim);width:52px;flex-shrink:0}
 .sheet.wide{max-width:660px}
+
+/* ---------- the handoff ----------
+ *
+ * Opaque, not the translucent scrim the other overlays use: at 92-95% the hand
+ * of cards behind it is still faintly legible, which is fine for a menu and
+ * not fine for the one screen whose whole job is that you cannot see what is
+ * under it. Above everything, including the floating action row. */
+.overlay.handoff{background:var(--ocean-deep);z-index:60}
+.handoff .sheet{text-align:center;max-width:420px;border-top:4px solid var(--seat)}
+.handoff-kicker{font-family:var(--font-map);font-size:11px;letter-spacing:.2em;
+  text-transform:uppercase;color:var(--sand-dim);margin:0 0 10px}
+.handoff-name{font-family:var(--font-map);font-size:34px;font-weight:700;letter-spacing:.08em;
+  text-transform:uppercase;margin:0 0 8px;color:var(--seat);overflow-wrap:anywhere}
+.handoff-what{color:var(--sand-dim);font-size:14px;line-height:1.55;margin:0 0 22px}
+.handoff-secret{border:1px solid var(--chart-line);background:var(--inset);padding:16px 18px;
+  margin:0 0 22px;text-align:left}
+.handoff-secret[hidden]{display:none}
+.handoff-secret .mission-text{margin:0}
+.handoff .btn{font-size:14px;padding:12px 22px}
+.handoff-note{color:var(--sand-dim);font-size:11.5px;margin:16px 0 0;line-height:1.5}
 .verdict{display:flex;align-items:baseline;gap:10px;margin:0 0 20px}
 .verdict .tag{font-family:var(--font-map);font-size:10px;letter-spacing:.18em;
   text-transform:uppercase;color:var(--sand-dim);border:1px solid var(--chart-line);
@@ -656,11 +679,26 @@ if ('serviceWorker' in navigator) {
     <h1>Domin<span>i</span>on</h1>
     <p class="sub">Forty-two territories, six continents, one map. Take reinforcements, press your attacks, hold your borders. Last commander standing takes the world.</p>
     <div class="field">
-      <label for="in-name">Your name</label>
-      <input type="text" id="in-name" value="You" maxlength="18">
+      <label for="in-people">People at this device</label>
+      <select id="in-people">
+        <option value="1" selected>Just me — against the computer</option>
+        <option value="2">2 people — pass the device</option>
+        <option value="3">3 people — pass the device</option>
+        <option value="4">4 people — pass the device</option>
+        <option value="5">5 people — pass the device</option>
+        <option value="6">6 people — pass the device</option>
+      </select>
     </div>
     <div class="field">
-      <label for="in-count">Opponents</label>
+      <label for="in-name" id="names-label">Your name</label>
+      <div class="names">
+        <div class="name-row"><span class="seat-swatch" id="swatch-1"></span>
+          <input type="text" id="in-name" value="You" maxlength="18"></div>
+        <div class="names" id="more-names"></div>
+      </div>
+    </div>
+    <div class="field">
+      <label for="in-count" id="count-label">Opponents</label>
       <select id="in-count">
         <option value="1">1 opponent</option>
         <option value="2" selected>2 opponents</option>
@@ -669,7 +707,7 @@ if ('serviceWorker' in navigator) {
         <option value="5">5 opponents</option>
       </select>
     </div>
-    <div class="field">
+    <div class="field" id="difficulty-field">
       <label>Difficulty</label>
       <div class="opponents" id="opponents"></div>
     </div>
@@ -692,7 +730,7 @@ if ('serviceWorker' in navigator) {
     <div class="field">
       <label for="in-order">Turn order</label>
       <select id="in-order">
-        <option value="first" selected>You go first</option>
+        <option value="first" selected id="order-first">You go first</option>
         <option value="random">Random — anyone may open</option>
       </select>
     </div>
@@ -723,6 +761,17 @@ if ('serviceWorker' in navigator) {
       <button class="btn" id="btn-start">Start the campaign</button>
       <button class="btn ghost" id="btn-load">Resume a saved game</button>
     </div>
+  </div>
+</div>
+
+<div class="overlay handoff" id="handoff" hidden role="dialog" aria-modal="true" aria-labelledby="handoff-name">
+  <div class="sheet">
+    <p class="handoff-kicker" id="handoff-kicker">Pass the device to</p>
+    <h2 class="handoff-name" id="handoff-name"></h2>
+    <p class="handoff-what" id="handoff-what"></p>
+    <div class="handoff-secret" id="handoff-secret" hidden></div>
+    <button class="btn" id="handoff-go"></button>
+    <p class="handoff-note" id="handoff-note"></p>
   </div>
 </div>
 
@@ -1677,10 +1726,48 @@ const STARTING_ARMIES = { 2: 40, 3: 35, 4: 30, 5: 25, 6: 20 };
 /** Chart palette — chosen to stay distinct against the navy ocean field. */
 const PLAYER_COLORS = ['#d4453a', '#3d8fd6', '#3fa87a', '#9b5fc0', '#e0a53c', '#2fa39b'];
 
+/** The table limits: Risk is a two-to-six player game. */
+const MIN_SEATS = 2;
+const MAX_SEATS = 6;
+
+/**
+ * The seats at the table, in the order they were set out.
+ *
+ * Each is a person or a CPU. The old shape — one human plus a list of CPU
+ * difficulties — is still accepted and translated here, so every caller that
+ * predates pass-and-play (and every test) keeps working unchanged.
+ */
+function normaliseSeats(seats, humanName, cpuDifficulties) {
+  const raw = seats || [
+    { name: humanName, isCPU: false },
+    ...cpuDifficulties.map((difficulty) => ({ isCPU: true, difficulty })),
+  ];
+  if (raw.length < MIN_SEATS || raw.length > MAX_SEATS) {
+    throw new Error(`A game needs between ${MIN_SEATS} and ${MAX_SEATS} seats`);
+  }
+  // A table of CPUs is a benchmark, not a game, and the whole UI is built around
+  // somebody holding the device. bench.js drives the engine directly instead.
+  if (!raw.some((s) => !s.isCPU)) throw new Error('A game needs at least one person');
+
+  let people = 0, cpus = 0;
+  return raw.map((s) => {
+    if (s.isCPU) {
+      cpus++;
+      const difficulty = s.difficulty || 'medium';
+      return { name: `CPU ${cpus} (${difficulty})`, isCPU: true, difficulty };
+    }
+    people++;
+    const name = String(s.name || '').trim().slice(0, 18) || `Player ${people}`;
+    return { name, isCPU: false, difficulty: null };
+  });
+}
+
 /**
  * @param {object} options
- * @param {string} [options.humanName]
- * @param {Array<'easy'|'medium'|'hard'>} options.cpuDifficulties  1-5 entries
+ * @param {Array<{name?: string, isCPU: boolean, difficulty?: string}>} [options.seats]
+ *        2-6 seats, at least one a person. Supersedes humanName/cpuDifficulties.
+ * @param {string} [options.humanName]  legacy: the single person's name
+ * @param {Array<'easy'|'medium'|'hard'>} [options.cpuDifficulties]  legacy: 1-5 entries
  * @param {number} [options.seed]
  * @param {boolean} [options.draft]  true = players claim territories one at a time;
  *                                   false = territories dealt at random (auto-assign)
@@ -1689,12 +1776,10 @@ const PLAYER_COLORS = ['#d4453a', '#3d8fd6', '#3fa87a', '#9b5fc0', '#e0a53c', '#
  * @param {boolean} [options.missions]  deal each commander a secret objective
  */
 function createGame({
-  humanName = 'You', cpuDifficulties = ['medium'], seed,
+  seats, humanName = 'You', cpuDifficulties = ['medium'], seed,
   draft = false, randomiseOrder = false, neutral = false, missions = false,
 } = {}) {
-  if (cpuDifficulties.length < 1 || cpuDifficulties.length > 5) {
-    throw new Error('Game requires between 1 and 5 CPU opponents');
-  }
+  const table = normaliseSeats(seats, humanName, cpuDifficulties);
 
   const rng = createRng(seed);
   /**
@@ -1704,20 +1789,20 @@ function createGame({
    * normally, and never takes a turn — so neither side can grow for free, and
    * every push costs armies that the other player did not have to spend.
    */
-  const useNeutral = neutral && cpuDifficulties.length === 1;
+  // Two seats, whoever fills them. It used to read "one CPU opponent", which
+  // quietly denied the neutral to two people sharing a device — and that is the
+  // two-player game the classic rules were written for.
+  const useNeutral = neutral && table.length === 2;
 
-  const players = [
-    { id: 'p0', name: humanName, isCPU: false, difficulty: null, color: PLAYER_COLORS[0], cards: [], eliminated: false },
-    ...cpuDifficulties.map((difficulty, i) => ({
-      id: `p${i + 1}`,
-      name: `CPU ${i + 1} (${difficulty})`,
-      isCPU: true,
-      difficulty,
-      color: PLAYER_COLORS[i + 1],
-      cards: [],
-      eliminated: false,
-    })),
-  ];
+  const players = table.map((seat, i) => ({
+    id: `p${i}`,
+    name: seat.name,
+    isCPU: seat.isCPU,
+    difficulty: seat.difficulty,
+    color: PLAYER_COLORS[i],
+    cards: [],
+    eliminated: false,
+  }));
 
   if (useNeutral) {
     players.push({
@@ -1868,6 +1953,18 @@ const getPlayer = (state, playerId) => state.players.find((p) => p.id === player
  */
 const humanPlayer = (state) =>
   state.players.find((p) => !p.isCPU && !p.isNeutral) || state.players[0];
+
+/** Every seat a person sits in, in turn order. */
+const peopleAtTable = (state) => state.players.filter((p) => !p.isCPU && !p.isNeutral);
+
+/**
+ * More than one person sharing the device.
+ *
+ * The one question the interface asks before hiding anything: with a single
+ * person there is nobody to hide it from, and everything behaves exactly as it
+ * did before pass-and-play existed.
+ */
+const isPassAndPlay = (state) => peopleAtTable(state).length > 1;
 
 /** Everyone who actually takes turns — the neutral faction never does. */
 const playingPlayers = (state) => state.players.filter((p) => !p.isNeutral);
@@ -2356,8 +2453,18 @@ function endTurn(state) {
     return { ok: true, phase: PHASES.GAME_OVER, winner: state.winner };
   }
 
-  // The neutral faction is skipped as well as the eliminated: it holds ground and
-  // defends, but it never takes a turn.
+  return passToNextSeat(state);
+}
+
+/**
+ * Hand the turn to the next seat that still plays.
+ *
+ * The neutral faction is skipped as well as the eliminated: it holds ground and
+ * defends, but it never takes a turn. Shared by endTurn and by a resignation
+ * that happens on the resigning player's own turn — which must not leave the
+ * game sitting on a seat nobody is in any more.
+ */
+function passToNextSeat(state) {
   let index = state.turn.playerIndex;
   do {
     index = (index + 1) % state.players.length;
@@ -2466,6 +2573,11 @@ function checkWinner(state) {
  * actually finish, and there is no reason to make someone play it out. The
  * conceding player's territories go to whoever currently leads, so the final
  * board is coherent rather than frozen mid-collapse.
+ *
+ * Whether the game then ends depends on who is left. If another person is
+ * still in it, it goes on: one player leaving a pass-and-play table should not
+ * end the evening for everyone else. If only CPUs remain, it ends as it always
+ * has — nobody wants to sit and watch the computers finish it.
  */
 function concede(state, playerId) {
   const player = getPlayer(state, playerId);
@@ -2474,6 +2586,18 @@ function concede(state, playerId) {
 
   const rivals = activeContenders(state).filter((p) => p.id !== playerId);
   if (!rivals.length) return fail('Nobody left to concede to');
+
+  const peopleLeft = rivals.filter((p) => !p.isCPU);
+  const playsOn = peopleLeft.length > 0 && rivals.length > 1;
+  // Setup has its own turn machinery — claim and deploy rotations — and a seat
+  // vanishing from the middle of it would leave armies nobody can place. Ending
+  // the game from setup is still allowed; leaving it to carry on is not.
+  if (playsOn && state.setup && state.setup.active) {
+    return fail('Wait until setup is complete to resign');
+  }
+  if (playsOn && state.turn.phase === PHASES.OCCUPY) {
+    return fail('Move troops into the captured territory first');
+  }
   const leader = rivals
     .sort((a, b) => territoryCount(state, b.id) - territoryCount(state, a.id))[0];
 
@@ -2500,11 +2624,24 @@ function concede(state, playerId) {
   }
   log(state, `${player.name} concedes to ${leader.name}`);
 
+  if (playsOn) {
+    // The handover can finish the game on its own: the leader's mission may
+    // have been to destroy exactly this colour, or they may now hold the lot.
+    const decided = checkWinner(state);
+    if (decided) {
+      state.turn.phase = PHASES.GAME_OVER;
+      return { ok: true, winner: decided, continues: false };
+    }
+    const wasTheirTurn = currentPlayer(state).id === playerId;
+    if (wasTheirTurn) passToNextSeat(state);
+    return { ok: true, winner: null, continues: true, to: leader };
+  }
+
   recordRound(state);
   state.endedBy = 'concede';
   state.winner = leader;
   state.turn.phase = PHASES.GAME_OVER;
-  return { ok: true, winner: leader };
+  return { ok: true, winner: leader, continues: false };
 }
 
 /* ===== src/turns/setup.js ===== */
@@ -2679,6 +2816,46 @@ function finishSetup(state) {
   state.turn = newTurnRecord(firstPlayingIndex(state));
   log(state, 'Setup complete — the campaign begins');
   return beginTurn(state);
+}
+
+/**
+ * Finish the draft for everyone, and stop there.
+ *
+ * Pass-and-play's version of auto-assign during claiming. Claims alternate, so
+ * there is no such thing as finishing only your own — but deployment is where
+ * each person's armies go, and nobody should have theirs placed by a button
+ * someone else pressed. So this deals the remaining territories and hands
+ * deployment back to the people.
+ */
+function autoClaimRemaining(state, pickClaim) {
+  let guard = 0;
+  while (state.setup.active && state.turn.phase === PHASES.CLAIM && guard++ < 200) {
+    const options = unclaimedTerritories(state);
+    if (!options.length) break;
+    const choice = pickClaim ? pickClaim(state, currentPlayer(state)) : state.rng.pick(options);
+    claimTerritory(state, (choice || state.rng.pick(options)).id);
+  }
+  return { ok: true, phase: state.turn.phase };
+}
+
+/**
+ * Place the rest of the current player's starting armies for them — and only
+ * theirs — then pass the floor on. Planned against the frozen board, the same
+ * terms every commander deploys under.
+ */
+function autoDeployCurrent(state, planner) {
+  if (state.turn.phase !== PHASES.DEPLOY) return refuse('Not in the deploy phase');
+  const player = currentPlayer(state);
+  const armies = armiesLeftToPlace(state, player.id);
+  if (armies > 0) {
+    const owned = territoriesOf(state, player.id);
+    const plan = planner
+      ? planner(boardAsAtDeploy(state), player, armies)
+      : [{ territoryId: state.rng.pick(owned).id, count: armies }];
+    applyDeploymentPlan(state, player, plan);
+  }
+  advanceDeploy(state);
+  return { ok: true, phase: state.turn.phase };
 }
 
 /**
@@ -4649,8 +4826,28 @@ const COARSE_QUERY = (typeof window !== 'undefined' && window.matchMedia)
   : null;
 const isCoarsePointer = () => !!(COARSE_QUERY && COARSE_QUERY.matches);
 
-/** The mission last shown in the panel, so a genuine conversion can be announced. */
-let shownMissionId = null;
+/**
+ * The mission each person last saw, so a genuine conversion can be announced —
+ * to them. Per player because in pass-and-play the panel shows a different
+ * person's card each turn, and comparing Ann's objective against the one Ben
+ * saw last would announce a change that never happened.
+ */
+let seenMission = {};
+
+/**
+ * Pass-and-play: who is holding the device.
+ *
+ * `viewerId` is the person whose private information — cards, mission — may be
+ * drawn right now. It is cleared the moment their turn ends, before anything is
+ * rendered for whoever is next. `coverFor` is the person the handoff screen is
+ * waiting on. With one person at the table neither is used: the viewer is
+ * simply that person, always, and nothing about the solo game changes.
+ */
+let viewerId = null;
+let coverFor = null;
+let coverStage = null;        // 'turn' | 'brief' (asking) | 'briefing' (showing the card)
+let briefed = new Set();      // people who have seen their mission before a draft
+let tableOf = null;           // the game the three above belong to
 let tipLayer = null;                 // the hover tooltip's <g>, kept so it can be removed
 let labelSpots = {};                 // territoryId -> where its name is lettered
 let shrunkNode = null;               // territory currently drawn mid-battle
@@ -4674,17 +4871,90 @@ function buildOpponentPickers() {
   }
 }
 function syncNeutralField() {
-  const solo = Number($('in-count').value) === 1;
-  $('neutral-field').style.opacity = solo ? '1' : '.4';
-  $('in-neutral').disabled = !solo;
+  // Two seats, whoever fills them — the engine's rule, mirrored here.
+  const duel = Number($('in-count').value) + peopleWanted() === 2;
+  $('neutral-field').style.opacity = duel ? '1' : '.4';
+  $('in-neutral').disabled = !duel;
 }
-$('in-count').addEventListener('change', () => { buildOpponentPickers(); syncNeutralField(); });
+
+/**
+ * People at this device.
+ *
+ * Kept beside the opponents list rather than replacing it with a general seat
+ * editor: the solo game — the one most games are — keeps exactly the form it
+ * had, with one extra line. People are seated first, in the order named; the
+ * "Random" turn order mixes everyone.
+ */
+const peopleWanted = () => Number(($('in-people') && $('in-people').value) || 1);
+
+function syncPeopleFields() {
+  const people = peopleWanted();
+  // Keep what has been typed. A name is the kind of thing people notice losing.
+  const typed = [];
+  for (let i = 2; i <= MAX_SEATS; i++) {
+    const el = $('in-name-' + i);
+    if (el) typed[i] = el.value;
+  }
+  let html = '';
+  for (let i = 2; i <= people; i++) {
+    html += '<div class="name-row"><span class="seat-swatch" id="swatch-' + i + '"></span>' +
+      '<input type="text" id="in-name-' + i + '" maxlength="18" placeholder="Player ' + i + '"' +
+      ' value="' + escapeHtml(typed[i] || '') + '"></div>';
+  }
+  $('more-names').innerHTML = html;
+
+  // "You" is the right default for one person and the wrong one for a table.
+  const first = $('in-name');
+  if (people > 1 && first.value === 'You') first.value = '';
+  if (people === 1 && first.value === '') first.value = 'You';
+  first.placeholder = people > 1 ? 'Player 1' : 'Your name';
+  $('names-label').textContent = people > 1 ? 'Names, in seat order' : 'Your name';
+
+  // At least one CPU when playing alone, none required with company; never
+  // more than the six seats a board takes.
+  const min = people === 1 ? 1 : 0;
+  const max = MAX_SEATS - people;
+  const was = Number($('in-count').value);
+  let opts = '';
+  for (let n = min; n <= max; n++) {
+    opts += '<option value="' + n + '">' + (n === 0 ? 'None' : n + (n === 1 ? ' opponent' : ' opponents')) + '</option>';
+  }
+  $('in-count').innerHTML = opts;
+  $('in-count').value = String(Math.max(min, Math.min(max, isNaN(was) ? 2 : was)));
+  $('count-label').textContent = people > 1 ? 'CPU opponents' : 'Opponents';
+
+  const order = $('order-first');
+  if (order) order.textContent = people > 1 ? 'Seat order — as named above' : 'You go first';
+  paintSeatSwatches();
+}
+
+/** Show each person the colour they will play, from the current board style. */
+function paintSeatSwatches() {
+  const ink = (c) => (theme().playerInk && theme().playerInk[c]) || c;
+  for (let i = 1; i <= MAX_SEATS; i++) {
+    const sw = $('swatch-' + i);
+    if (sw) sw.style.background = peopleWanted() > 1 ? ink(PLAYER_COLORS[i - 1]) : 'transparent';
+  }
+  const one = $('swatch-1');
+  if (one) one.style.display = peopleWanted() > 1 ? '' : 'none';
+}
+
+function syncDifficultyField() {
+  $('difficulty-field').hidden = Number($('in-count').value) === 0;
+}
+
+$('in-people').addEventListener('change', () => {
+  syncPeopleFields(); buildOpponentPickers(); syncNeutralField(); syncDifficultyField();
+});
+$('in-count').addEventListener('change', () => { buildOpponentPickers(); syncNeutralField(); syncDifficultyField(); });
 // Applied on change rather than on start: picking a board style and having
 // nothing happen until you commit to a game is a poor way to choose one. The
 // setup sheet is itself themed, so it previews the choice.
-$('in-theme').addEventListener('change', () => setTheme($('in-theme').value));
+$('in-theme').addEventListener('change', () => { setTheme($('in-theme').value); paintSeatSwatches(); });
+syncPeopleFields();
 buildOpponentPickers();
 syncNeutralField();
+syncDifficultyField();
 
 $('btn-start').addEventListener('click', () => {
   const difficulties = [...$('opponents').querySelectorAll('select')].map((s) => s.value);
@@ -4693,9 +4963,15 @@ $('btn-start').addEventListener('click', () => {
   newGameId();
   busy = false;
   applyTheme($('in-theme').value);
+  const people = peopleWanted();
+  const names = [$('in-name').value];
+  for (let i = 2; i <= people; i++) names.push(($('in-name-' + i) || {}).value || '');
   state = createGame({
-    humanName: $('in-name').value.trim() || 'You',
-    cpuDifficulties: difficulties,
+    seats: names.map((name, i) => ({
+      // Solo keeps its default; a table falls back to seat labels in the engine.
+      name: people === 1 ? (name.trim() || 'You') : name,
+      isCPU: false,
+    })).concat(difficulties.map((difficulty) => ({ isCPU: true, difficulty }))),
     seed: seedInput === '' ? Math.floor(Math.random() * 1e9) : Number(seedInput),
     draft: drafting,
     randomiseOrder: $('in-order').value === 'random',
@@ -4710,7 +4986,7 @@ $('btn-start').addEventListener('click', () => {
   // A different game's card is not a changed card. Without this, starting a new
   // game or loading a save announces "your objective changed" on the first
   // render, which is the one message that has to be trustworthy.
-  shownMissionId = null;
+  seenMission = {};
   $('setup').hidden = true;
   $('result').hidden = true;
   drawBoard();
@@ -4757,7 +5033,7 @@ function doLoad(file) {
       sel = { from: null, to: null, chunk: 1, moveCount: null, lastCombat: null, pickedCards: [] };
       busy = false;
       hovered = null;
-      shownMissionId = null;
+      seenMission = {};
       $('setup').hidden = true;
       $('result').hidden = true;
       drawBoard();
@@ -4773,15 +5049,29 @@ function doLoad(file) {
 }
 
 function doConcede() {
-  if (!state || busy) return;
+  if (!state || busy || coverFor) return;
   if (state.turn.phase === PHASES.GAME_OVER) return;
-  const human = humanPlayer(state);
-  if (human.eliminated) return;
-  if (!window.confirm('Concede the game? Your territories pass to the leader and the campaign ends.')) {
-    return;
-  }
+  // The person holding the device, never "the human": with several people at
+  // the table that would resign whoever happened to be seated first.
+  const human = viewer();
+  if (!human || human.eliminated) return;
+  const othersPlayOn = activeContenders(state)
+    .some((p) => p.id !== human.id && !p.isCPU) && activeContenders(state).length > 2;
+  const question = othersPlayOn
+    ? human.name + ', resign? Your territories pass to the leader and the others play on.'
+    : (isPassAndPlay(state) ? human.name + ', concede' : 'Concede') +
+      ' the game? Your territories pass to the leader and the campaign ends.';
+  if (!window.confirm(question)) return;
   const r = concede(state, human.id);
   if (!r.ok) return flash(r.error);
+  if (r.continues) {
+    viewerId = null;
+    sel = { from: null, to: null, chunk: 1, moveCount: null, lastCombat: null, pickedCards: [] };
+    render();
+    flash(human.name + ' has resigned. ' + r.to.name + ' takes their territories.');
+    kickOff();
+    return;
+  }
   render();
   showResult();
 }
@@ -4869,6 +5159,7 @@ $('btn-theme').addEventListener('click', cycleTheme);
 $('btn-save').addEventListener('click', doSave);
 $('btn-save-final').addEventListener('click', doSave);
 $('btn-concede').addEventListener('click', doConcede);
+$('handoff-go').addEventListener('click', liftHandoff);
 $('btn-load').addEventListener('click', () => $('file-load').click());
 $('file-load').addEventListener('change', (e) => {
   const file = e.target.files && e.target.files[0];
@@ -5810,6 +6101,7 @@ function inkOn(hex) {
 
 function render() {
   if (!state) return;
+  syncTable();
   const player = currentPlayer(state);
   $('r-round').textContent = state.turnNumber;
   $('r-phase').textContent = PHASE_NAMES[state.turn.phase] || state.turn.phase;
@@ -5822,9 +6114,12 @@ function render() {
   // this line sits beside Round and Phase and describes the turn order, and the
   // neutral never takes a turn.
   const seats = playingPlayers(state);
-  const seat = seats.indexOf(humanPlayer(state)) + 1;
+  // Whose seat: yours when solo; in pass-and-play, whoever is up — there is no
+  // single "you", and the seat that matters is the one taking the turn.
+  const seat = seats.indexOf(isPassAndPlay(state) ? player : humanPlayer(state)) + 1;
   $('r-seat').textContent = seat + ' of ' + seats.length;
-  const playable = state.turn.phase !== PHASES.GAME_OVER && !humanPlayer(state).eliminated;
+  const me = viewer();
+  const playable = state.turn.phase !== PHASES.GAME_OVER && !!me && !me.eliminated;
   $('btn-concede').disabled = !playable;
   // A save is only coherent between moves, not inside one.
   $('btn-save').disabled = busy;
@@ -5840,6 +6135,143 @@ function render() {
   renderMission();
   renderCards();
   renderLog();
+  renderHandoff();
+}
+
+/**
+ * The person whose private information may be drawn right now, or null.
+ *
+ * Solo, that is always the one person at the table. In pass-and-play it is
+ * whoever lifted the handoff screen, and only until their turn ends — during a
+ * CPU turn, a draft, or with the screen down it is nobody, and the panels that
+ * would show a hand or a mission say so instead.
+ */
+function viewer() {
+  if (!state) return null;
+  if (!isPassAndPlay(state)) return humanPlayer(state);
+  return viewerId ? getPlayer(state, viewerId) : null;
+}
+
+/**
+ * Decide who may look, before anything is drawn.
+ *
+ * Runs at the top of every render, so there is no path to the screen that
+ * skips it: a turn ending, a CPU finishing, a save loading, a new game.
+ */
+function syncTable() {
+  if (tableOf !== state) {
+    tableOf = state;
+    viewerId = null; coverFor = null; coverStage = null;
+    briefed = new Set();
+    seenMission = {};
+  }
+  if (!isPassAndPlay(state)) { viewerId = null; coverFor = null; coverStage = null; return; }
+  if (state.turn.phase === PHASES.GAME_OVER) { viewerId = null; coverFor = null; coverStage = null; return; }
+
+  const cur = currentPlayer(state);
+  const person = !cur.isCPU && !cur.isNeutral;
+
+  // Your turn is over the moment it is someone else's. Cleared here, before
+  // the panels are drawn, so the next render cannot show your hand to them.
+  if (viewerId && viewerId !== cur.id) viewerId = null;
+
+  // A draft is the one stretch where people decide before anyone has had a
+  // private look: missions shape which territories are worth claiming. So each
+  // person sees their card first, in seat order, the way everyone peeks at
+  // theirs before a physical game starts.
+  if (state.missions && state.setup.active && state.turn.phase === PHASES.CLAIM) {
+    const waiting = peopleAtTable(state).find((p) => !briefed.has(p.id));
+    if (waiting) {
+      if (coverFor !== waiting.id || (coverStage !== 'brief' && coverStage !== 'briefing')) {
+        coverFor = waiting.id; coverStage = 'brief';
+      }
+      return;
+    }
+  }
+
+  // Claiming is public and alternates one territory at a time: a handoff
+  // screen per pick would mean forty of them just to deal the map. The
+  // commander readout names whoever is picking instead.
+  if (!person || state.turn.phase === PHASES.CLAIM) { coverFor = null; coverStage = null; return; }
+  if (viewerId === cur.id) { coverFor = null; coverStage = null; return; }
+  if (coverFor !== cur.id) clearFlash();      // "You earned a card" was for the last person
+  coverFor = cur.id; coverStage = 'turn';
+}
+
+/** Draw, or take down, the handoff screen. */
+function renderHandoff() {
+  const box = $('handoff');
+  if (!box) return;
+  if (!coverFor || !state) { box.hidden = true; return; }
+  const p = getPlayer(state, coverFor);
+  box.hidden = false;
+  box.style.setProperty('--seat', colorOf(p.id));
+  $('handoff-name').textContent = p.name;
+  const secret = $('handoff-secret');
+  secret.hidden = true;
+  secret.innerHTML = '';
+
+  if (coverStage === 'briefing') {
+    $('handoff-kicker').textContent = 'For ' + p.name + ' only';
+    $('handoff-what').textContent = 'Your secret mission. Nobody else will see it until the game ends.';
+    secret.hidden = false;
+    secret.innerHTML = '<p class="mission-text">' + escapeHtml(p.mission ? p.mission.text : '') + '</p>';
+    $('handoff-go').textContent = 'Got it — hide it';
+    const next = peopleAtTable(state).find((q) => q.id !== p.id && !briefed.has(q.id));
+    $('handoff-note').textContent = next ? 'Then pass to ' + next.name + '.' : 'Then the draft begins.';
+    return;
+  }
+
+  $('handoff-kicker').textContent = 'Pass the device to';
+  $('handoff-go').textContent = 'I’m ' + p.name + ' — ' +
+    (coverStage === 'brief' ? 'show my mission' : 'start');
+  $('handoff-note').textContent = coverStage === 'brief'
+    ? 'Everyone sees their own mission before the draft.'
+    : 'Hands and missions stay hidden until you tap.';
+  if (coverStage === 'brief') {
+    $('handoff-what').textContent = 'Before the draft: your secret mission.';
+  } else if (state.setup.active) {
+    $('handoff-what').textContent = 'Deploy your starting armies. Everyone places against '
+      + 'the board as it stood when deployment opened — nobody sees anyone else’s '
+      + 'placements until the game begins.';
+  } else {
+    $('handoff-what').textContent = 'Round ' + state.turnNumber + ' — your turn.';
+  }
+}
+
+/** The one button on the handoff screen. */
+function liftHandoff() {
+  if (!coverFor || !state) return;
+  const id = coverFor;
+  if (coverStage === 'brief') { coverStage = 'briefing'; renderHandoff(); return; }
+  if (coverStage === 'briefing') {
+    briefed.add(id);
+    coverFor = null; coverStage = null;
+    render();
+    kickOff();                // the draft may open on a CPU's pick
+    return;
+  }
+  viewerId = id;
+  coverFor = null; coverStage = null;
+  render();
+}
+
+/**
+ * Troops as the person holding the device may see them.
+ *
+ * Deployment is simultaneous: in pass-and-play each person places against the
+ * board as it stood when deployment opened, the same rule the CPUs have always
+ * followed. So until setup ends, everyone else's squares show their count from
+ * that moment — and the reveal is the first turn. Solo, the board is the board.
+ */
+function shownTroops(id) {
+  const t = state.territories[id];
+  if (!isPassAndPlay(state) || !state.setup.active || state.turn.phase !== PHASES.DEPLOY) {
+    return t.troopCount;
+  }
+  if (viewerId && t.ownerId === viewerId) return t.troopCount;
+  const snap = state.setup.boardAtDeploy && state.setup.boardAtDeploy[id];
+  return snap ? snap[1] : t.troopCount;
 }
 
 function renderRoster() {
@@ -5922,7 +6354,7 @@ function renderMap() {
     const fill = colorOf(t.ownerId);
     node.disc.setAttribute('fill', fill);
     node.troops.setAttribute('fill', inkOn(fill));
-    node.troops.textContent = t.ownerId ? t.troopCount : '';
+    node.troops.textContent = t.ownerId ? shownTroops(id) : '';
     const cls = ['terr'];
     if (!t.ownerId) cls.push('unclaimed');
     if (actionable[id]) cls.push('actionable');
@@ -5992,7 +6424,7 @@ function renderHover() {
   const p = LAYOUT[hovered];
   const owner = t.ownerId ? state.players.find((x) => x.id === t.ownerId) : null;
   const lines = [
-    owner ? owner.name + ' \u00b7 ' + t.troopCount + (t.troopCount === 1 ? ' troop' : ' troops') : 'Unclaimed',
+    owner ? owner.name + ' \u00b7 ' + troopWord(shownTroops(hovered)) : 'Unclaimed',
     t.adjacentIds.length + ' borders \u00b7 ' + CONTINENTS[t.continentId].name,
   ];
 
@@ -6058,20 +6490,31 @@ function renderAction() {
 function renderClaim(box, title) {
   title.textContent = 'Claim territories';
   const left = unclaimedTerritories(state).length;
-  box.innerHTML = '<p class="prompt">Pick a territory to claim. <strong>' + left +
+  const who = currentPlayer(state);
+  // No handoff screen during the draft, so say whose pick it is in words and
+  // in their colour — the one thing that has to be unmissable when the device
+  // is going round the table after every tap.
+  const lead = isPassAndPlay(state)
+    ? '<strong style="color:' + colorOf(who.id) + '">' + escapeHtml(who.name) + '</strong>, pick a territory to claim. '
+    : 'Pick a territory to claim. ';
+  box.innerHTML = '<p class="prompt">' + lead + '<strong>' + left +
     '</strong> still unclaimed — take turns until the map is full, then deploy the rest ' +
     'of your armies where you want them.</p>';
-  addRow(box, [['Auto-assign the rest', 'btn ghost', doAutoAssign]]);
+  addRow(box, [[isPassAndPlay(state) ? 'Auto-claim the rest for everyone' : 'Auto-assign the rest',
+    'btn ghost', doAutoAssign]]);
 }
 
 function renderDeploy(box, title) {
   title.textContent = 'Deploy';
-  const left = armiesLeftToPlace(state, humanPlayer(state).id);
+  const left = armiesLeftToPlace(state, currentPlayer(state).id);
   box.innerHTML = '<p class="prompt"><strong>' + left + '</strong> arm' + (left === 1 ? 'y' : 'ies') +
     ' left to place. Put them anywhere you hold — this is your chance to build a wall ' +
     'before anyone moves.</p>' +
-    '<p class="hint">Your opponents are deploying at the same time, against the board as it ' +
-    'stands now. They cannot see where you put these.</p>' +
+    (isPassAndPlay(state)
+      ? '<p class="hint">Everyone else\u2019s squares show their count from when deployment ' +
+        'opened. Nobody sees where you put these until the first turn.</p>'
+      : '<p class="hint">Your opponents are deploying at the same time, against the board as it ' +
+        'stands now. They cannot see where you put these.</p>') +
     '<div class="segmented" id="chunks">' +
       [1, 5, 'all'].map((v) => {
         const on = String(sel.chunk) === String(v) ? ' class="on"' : '';
@@ -6080,7 +6523,8 @@ function renderDeploy(box, title) {
   [].forEach.call(box.querySelectorAll('#chunks button'), (b) => {
     b.addEventListener('click', () => { sel.chunk = b.dataset.chunk; render(); });
   });
-  const rows = [['Auto-assign the rest', 'btn ghost', doAutoAssign]];
+  const rows = [[isPassAndPlay(state) ? 'Auto-place mine' : 'Auto-assign the rest',
+    'btn ghost', doAutoAssign]];
   if (undoableCount(state) > 0) rows.unshift(['Undo', 'btn ghost', doUndo]);
   addRow(box, rows);
 }
@@ -6345,6 +6789,8 @@ function renderQuickbar() {
  * is sized in CSS pixels so it stays readable at every board scale — which is
  * the thing the floating box could not do, being drawn in board units.
  */
+const troopWord = (n) => n + (n === 1 ? ' troop' : ' troops');
+
 function renderTapbar() {
   const bar = $('tapbar');
   if (!bar) return;
@@ -6357,9 +6803,7 @@ function renderTapbar() {
   }
   const owner = t.ownerId ? state.players.find((x) => x.id === t.ownerId) : null;
   const kind = TERRITORY_CARD_TYPE[hovered];
-  const facts = (owner
-      ? t.troopCount + (t.troopCount === 1 ? ' troop' : ' troops')
-      : 'Unclaimed')
+  const facts = (owner ? troopWord(shownTroops(hovered)) : 'Unclaimed')
     + ' \u00b7 ' + t.adjacentIds.length + ' borders \u00b7 '
     + CONTINENTS[t.continentId].name;
 
@@ -6391,17 +6835,24 @@ function renderTapbar() {
  */
 function renderMission() {
   const box = $('mission-box');
-  if (!state.missions) { box.hidden = true; shownMissionId = null; return; }
-  const human = humanPlayer(state);
+  if (!state.missions) { box.hidden = true; return; }
+  const human = viewer();
+  if (!human) {
+    box.hidden = false;
+    $('mission').innerHTML = '<p class="empty">Missions are private. Yours shows on your own turn.</p>';
+    return;
+  }
   const mission = human.mission;
   if (!mission) { box.hidden = true; return; }
   box.hidden = false;
 
   // A mission that silently becomes a different mission is a bad surprise at
   // exactly the moment it matters. The engine converts it when someone else
-  // destroys your target; say so out loud the first time it is drawn.
-  const converted = shownMissionId !== null && shownMissionId !== mission.id;
-  shownMissionId = mission.id;
+  // destroys your target — usually on someone else's turn — so it is announced
+  // the next time *you* are the one looking, not to whoever holds the device.
+  const last = seenMission[human.id];
+  const converted = last !== undefined && last !== mission.id;
+  seenMission[human.id] = mission.id;
 
   const p = mission.progress(state, human.id);
   const complete = mission.check(state, human.id);
@@ -6429,7 +6880,12 @@ function renderMission() {
 }
 
 function renderCards() {
-  const human = humanPlayer(state);
+  const human = viewer();
+  if (!human) {
+    $('card-count').textContent = '';
+    $('cards').innerHTML = '<p class="empty">Hands are private. Yours shows on your own turn.</p>';
+    return;
+  }
   const hand = human.cards;
   $('card-count').textContent = hand.length ? '(' + hand.length + ')' : '';
 
@@ -6497,6 +6953,10 @@ function onTerritory(id) {
 
   const player = currentPlayer(state);
   if (busy || player.isCPU || state.turn.phase === PHASES.GAME_OVER) return;
+  // The handoff screen covers the board, so a tap cannot reach here — but a
+  // keyboard, a stale event or a test harness can, and acting for someone who
+  // has not taken the device yet is exactly what the screen exists to prevent.
+  if (coverFor) return;
   const t = state.territories[id];
 
   if (state.turn.phase === PHASES.CLAIM) {
@@ -6659,6 +7119,7 @@ async function doAttack(pressOn) {
 }
 
 function doEndAttack() {
+  if (coverFor) return;
   const r = endAttack(state);
   if (!r.ok) return flash(r.error);
   sel.from = null; sel.to = null; sel.lastCombat = null;
@@ -6667,6 +7128,7 @@ function doEndAttack() {
 }
 
 function doEndTurn() {
+  if (coverFor) return;
   const r = endTurn(state);
   if (!r.ok) return flash(r.error);
   sel = { from: null, to: null, chunk: sel.chunk, moveCount: null, lastCombat: null, pickedCards: [] };
@@ -6676,7 +7138,7 @@ function doEndTurn() {
 }
 
 function doUndo() {
-  if (busy) return;
+  if (busy || coverFor) return;
   const rewinding = canRewindToReinforcement(state);
   const r = undoPlacement(state);
   if (!r.ok) return flash(r.error);
@@ -6698,6 +7160,12 @@ function onKey(e) {
   if (!state || busy || $('setup').hidden === false || $('result').hidden === false) return;
   if (e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName || '')) return;
   if (currentPlayer(state).isCPU) return;
+  // Space ends a phase and U undoes one: behind the handoff screen both would
+  // act on a turn nobody has picked up yet.
+  if (coverFor) {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); liftHandoff(); }
+    return;
+  }
   const phase = state.turn.phase;
 
   if (e.key === 'Escape') {
@@ -6727,7 +7195,24 @@ function onKey(e) {
 document.addEventListener('keydown', onKey);
 
 function doAutoAssign() {
-  if (busy) return;
+  if (busy || coverFor) return;
+  if (isPassAndPlay(state)) {
+    // Solo, "the rest" is all yours to hand over. With several people it is
+    // not: the draft is shared, so finishing it is a table decision and says
+    // so, and deployment is private, so this only ever places your own.
+    if (state.turn.phase === PHASES.CLAIM) {
+      const n = unclaimedTerritories(state).length;
+      if (!window.confirm('Let the computer claim the remaining ' + n +
+        ' territories for everyone? Each of you still deploys your own armies.')) return;
+      autoClaimRemaining(state, pickClaim);
+    } else if (state.turn.phase === PHASES.DEPLOY) {
+      autoDeployCurrent(state, planDeployment);
+    }
+    clearFlash();
+    render();
+    runSetup();
+    return;
+  }
   autoAssignRemaining(state, pickClaim, planDeployment);
   clearFlash();
   render();
@@ -6744,6 +7229,10 @@ function doAutoAssign() {
  */
 async function runSetup() {
   if (busy) return;
+  // Mission briefings come before the draft. A CPU claiming behind the screen
+  // while people take turns reading their cards would open the map without
+  // them; liftHandoff calls back in once the last person has read theirs.
+  if (coverFor) return;
   busy = true;
   const era = gameId;
   try {
@@ -6846,6 +7335,7 @@ function clearFlash() {
  */
 function showResult() {
   const winner = state.winner;
+  if (isPassAndPlay(state)) return showTableResult(winner);
   const human = humanPlayer(state);
   const won = winner && winner.id === human.id;
   const conceded = state.endedBy === 'concede';
@@ -6873,6 +7363,38 @@ function showResult() {
             : ' took the world in ' + rounds + '.'));
 
   renderHeadline(human, winner);
+  renderReveal(winner);
+  renderChart();
+  renderStatGrid();
+  $('result').hidden = false;
+}
+
+/**
+ * The result, for a table rather than a person.
+ *
+ * Every sentence on the solo screen is written to "you", which at a shared
+ * device means whoever happens to be holding it. Here the winner is named, and
+ * the headline figures are theirs.
+ */
+function showTableResult(winner) {
+  const rounds = state.turnNumber + (state.turnNumber === 1 ? ' round' : ' rounds');
+  const name = winner ? escapeHtml(winner.name) : 'Nobody';
+  const person = winner && !winner.isCPU;
+  const objective = state.endedBy === 'mission' && winner && winner.mission ? winner.mission.text : '';
+  $('result-title').innerHTML = person
+    ? name + ' <span>wins</span>'
+    : 'The map is <span>lost</span>';
+  const how = {
+    mission: ' completed a secret mission in ' + rounds + '. ' + objective,
+    conquest: ' took all 42 territories in ' + rounds + '.',
+    elimination: ' was the last commander standing after ' + rounds + '.',
+    concede: person
+      ? ' holds the field after ' + rounds + ' \u2014 everyone else resigned.'
+      : ' takes the board after ' + rounds + ' \u2014 the last of you resigned.',
+  }[state.endedBy] || ' won after ' + rounds + '.';
+  $('result-sub').textContent = (winner ? winner.name : 'Nobody') + how;
+
+  renderHeadline(winner || peopleAtTable(state)[0], winner);
   renderReveal(winner);
   renderChart();
   renderStatGrid();
@@ -6918,15 +7440,18 @@ function renderReveal(winner) {
 function renderHeadline(human, winner) {
   const mine = state.stats[human.id];
   const peak = mine.peakTerritories;
+  // Solo, the figures are yours. At a shared table there is no "you", so they
+  // are the subject's by name.
+  const whose = isPassAndPlay(state) ? escapeHtml(human.name.split(' (')[0]) : null;
   const bloodiest = state.players
     .map((p) => ({ p, n: state.stats[p.id].troopsLost }))
     .sort((a, b) => b.n - a.n)[0];
   const swing = biggestSwing();
 
   $('headline').innerHTML = [
-    ['Your peak', peak + ' <small>of 42</small>'],
-    ['Troops you lost', String(mine.troopsLost)],
-    ['Territories you took', String(mine.territoriesCaptured)],
+    [whose ? whose + '\u2019s peak' : 'Your peak', peak + ' <small>of 42</small>'],
+    [whose ? 'Troops ' + whose + ' lost' : 'Troops you lost', String(mine.troopsLost)],
+    [whose ? 'Territories ' + whose + ' took' : 'Territories you took', String(mine.territoriesCaptured)],
     ['Bloodiest campaign', escapeHtml(bloodiest.p.name.split(' (')[0]) +
       ' <small>' + bloodiest.n + ' lost</small>'],
     swing ? ['Biggest swing', 'Round ' + swing.turn + ' <small>' +
@@ -7140,7 +7665,9 @@ function renderStatGrid() {
     const cls = [];
     // same trap as the seat readout — the neutral faction is !isCPU too, and
     // marking its row as yours on the summary is the visible symptom
-    if (p.id === humanPlayer(state).id) cls.push('you');
+    // No single "you" at a shared table; marking one person's row would be a
+    // guess at who is holding the device when the game ended.
+    if (!isPassAndPlay(state) && p.id === humanPlayer(state).id) cls.push('you');
     if (p.eliminated) cls.push('out');
     return '<tr class="' + cls.join(' ') + '">' +
       '<td><span class="who"><span class="swatch" style="background:' + colorOf(p.id) + '"></span>' +

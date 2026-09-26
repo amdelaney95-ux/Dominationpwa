@@ -291,8 +291,12 @@ svg.board{width:100%;height:100%;display:block;flex:1;min-height:0}
   .readout{gap:10px}
   .readout dl:nth-of-type(4){display:none}
   .wordmark{font-size:15px;letter-spacing:.14em}
-  .speed button{padding:3px 6px}
-  .topbar .btn{padding:3px 7px!important}
+  /* Letter-spacing is most of the width here: at .12-.18em a four-button bar
+     wrapped once missions added a fourth. Measured at 852, 844 and 812px wide,
+     this keeps the bar on the same rows with the Mission button as without it. */
+  .speed button{padding:3px 6px;letter-spacing:.06em;font-size:9.5px}
+  .topbar .btn{padding:3px 7px!important;letter-spacing:.06em;font-size:9.5px!important}
+  .readout dt{letter-spacing:.08em}
 }
 /* The floating action row.
  *
@@ -385,6 +389,10 @@ svg.board{width:100%;height:100%;display:block;flex:1;min-height:0}
   .btn:hover:not(:disabled){background:var(--brass);color:var(--ink-on-accent)}
 }
 .btn.ghost{border-color:var(--chart-line);color:var(--sand-dim);background:none}
+/* The hidden attribute is only a UA display:none, and .btn's inline-block beats
+   it — so the Mission button showed in games without missions, and pushed the
+   top bar onto a second row on a landscape phone. */
+.btn[hidden]{display:none}
 @media (hover: hover){
   .btn.ghost:hover:not(:disabled){border-color:var(--sand-dim);color:var(--sand);background:none}
 }
@@ -554,6 +562,15 @@ input[type=range]{width:100%;accent-color:var(--brass)}
 .handoff-secret .mission-text{margin:0}
 .handoff .btn{font-size:14px;padding:12px 22px}
 .handoff-note{color:var(--sand-dim);font-size:11.5px;margin:16px 0 0;line-height:1.5}
+/* The mission on request: the same card as the pre-draft briefing, over the
+   board rather than instead of it. Not called .reveal: that name belongs to the
+   end-of-game mission list, whose border and margin quietly shrank this overlay
+   20px short of the bottom of the screen. The person looking already holds
+   the device. Opaque all the same — it is a secret on a shared screen. */
+.overlay.mission-peek{background:var(--ocean-deep);z-index:55}
+.mission-peek .sheet{text-align:center;max-width:440px;border-top:4px solid var(--seat)}
+.mission-peek .handoff-secret .mission-note{text-align:left}
+.mission-ask{margin-top:2px}
 .verdict{display:flex;align-items:baseline;gap:10px;margin:0 0 20px}
 .verdict .tag{font-family:var(--font-map);font-size:10px;letter-spacing:.18em;
   text-transform:uppercase;color:var(--sand-dim);border:1px solid var(--chart-line);
@@ -646,6 +663,7 @@ if ('serviceWorker' in navigator) {
       <dl><dt>Seat</dt><dd id="r-seat">—</dd></dl>
       <div class="speed" id="speed"></div>
       <button class="btn ghost" id="btn-theme" style="padding:4px 10px;font-size:10px">Board</button>
+      <button class="btn ghost" id="btn-mission" style="padding:4px 10px;font-size:10px" hidden>Mission</button>
       <button class="btn ghost" id="btn-save" style="padding:4px 10px;font-size:10px">Save</button>
       <button class="btn ghost" id="btn-concede" style="padding:4px 10px;font-size:10px">Concede</button>
     </div>
@@ -785,6 +803,15 @@ if ('serviceWorker' in navigator) {
     <div class="handoff-secret" id="handoff-secret" hidden></div>
     <button class="btn" id="handoff-go"></button>
     <p class="handoff-note" id="handoff-note"></p>
+  </div>
+</div>
+
+<div class="overlay mission-peek" id="mission-reveal" hidden role="dialog" aria-modal="true" aria-labelledby="reveal-name">
+  <div class="sheet">
+    <p class="handoff-kicker" id="reveal-kicker">Secret mission</p>
+    <h2 class="handoff-name" id="reveal-name"></h2>
+    <div class="handoff-secret" id="reveal-body"></div>
+    <button class="btn" id="reveal-hide">Hide it</button>
   </div>
 </div>
 
@@ -5173,6 +5200,8 @@ $('btn-save').addEventListener('click', doSave);
 $('btn-save-final').addEventListener('click', doSave);
 $('btn-concede').addEventListener('click', doConcede);
 $('handoff-go').addEventListener('click', liftHandoff);
+$('btn-mission').addEventListener('click', openMission);
+$('reveal-hide').addEventListener('click', hideMission);
 $('btn-load').addEventListener('click', () => $('file-load').click());
 $('file-load').addEventListener('change', (e) => {
   const file = e.target.files && e.target.files[0];
@@ -6149,6 +6178,12 @@ function render() {
   renderCards();
   renderLog();
   renderHandoff();
+  renderMissionReveal();
+  const mb = $('btn-mission');
+  if (mb) {
+    mb.hidden = !state.missions;
+    mb.disabled = !missionHolder();
+  }
 }
 
 /**
@@ -6163,6 +6198,59 @@ function viewer() {
   if (!state) return null;
   if (!isPassAndPlay(state)) return humanPlayer(state);
   return viewerId ? getPlayer(state, viewerId) : null;
+}
+
+/**
+ * Whose mission may be shown on request right now, or null.
+ *
+ * Solo, yours, whenever you like. At a shared table, only the person holding
+ * the device for a move of their own: whoever lifted the handoff screen, or —
+ * during the draft, which has no handoff screen — whoever is picking, since
+ * the device is in their hands for that pick. Never during a CPU turn, and
+ * never behind the handoff screen.
+ */
+function missionHolder() {
+  if (!state || !state.missions || state.turn.phase === PHASES.GAME_OVER) return null;
+  if (!isPassAndPlay(state)) {
+    const me = humanPlayer(state);
+    return me && !me.eliminated && me.mission ? me : null;
+  }
+  if (coverFor) return null;
+  const me = viewer();
+  if (me) return me.mission ? me : null;
+  const cur = currentPlayer(state);
+  if (state.turn.phase === PHASES.CLAIM && !cur.isCPU && !cur.isNeutral && cur.mission) return cur;
+  return null;
+}
+
+let revealFor = null;          // whose mission the reveal sheet is showing
+
+function openMission() {
+  const who = missionHolder();
+  if (!who || busy) return;
+  revealFor = who.id;
+  // Seeing it is seeing it: a conversion announced a moment later would be old news.
+  seenMission[who.id] = who.mission.id;
+  renderMissionReveal();
+}
+
+function hideMission() {
+  revealFor = null;
+  renderMissionReveal();
+}
+
+/** The reveal sheet. Closes itself the moment its owner is no longer the one who may look. */
+function renderMissionReveal() {
+  const box = $('mission-reveal');
+  if (!box) return;
+  const who = missionHolder();
+  if (revealFor && (!who || who.id !== revealFor)) revealFor = null;
+  if (!revealFor) { box.hidden = true; return; }
+  box.hidden = false;
+  box.style.setProperty('--seat', colorOf(who.id));
+  $('reveal-kicker').textContent = isPassAndPlay(state) ? 'For ' + who.name + ' only' : 'Your secret mission';
+  $('reveal-name').textContent = who.name;
+  $('reveal-body').innerHTML = missionBody(who);
 }
 
 /**
@@ -6208,6 +6296,7 @@ function syncTable() {
   if (!person || state.turn.phase === PHASES.CLAIM) { coverFor = null; coverStage = null; return; }
   if (viewerId === cur.id) { coverFor = null; coverStage = null; return; }
   if (coverFor !== cur.id) clearFlash();      // "You earned a card" was for the last person
+  revealFor = null;
   coverFor = cur.id; coverStage = 'turn';
 }
 
@@ -6849,6 +6938,37 @@ function renderTapbar() {
 function renderMission() {
   const box = $('mission-box');
   if (!state.missions) { box.hidden = true; return; }
+
+  // At a shared table the card is never left face-up in the panel, even on
+  // your own turn — people sit round a device, and a panel is readable from
+  // across a table. It is there on request instead, for whoever may look.
+  if (isPassAndPlay(state)) {
+    box.hidden = false;
+    const who = missionHolder();
+    if (!who) {
+      $('mission').innerHTML = '<p class="empty">Missions are private. Yours can be revealed on your own turn.</p>';
+    } else {
+      $('mission').innerHTML = '<p class="empty">Face down. Only ' + escapeHtml(who.name) +
+        ' should look.</p><div class="btn-row mission-ask"><button class="btn ghost" id="btn-mission-panel">' +
+        'Reveal my mission</button></div>';
+      const b = $('btn-mission-panel');
+      if (b) b.addEventListener('click', openMission);
+    }
+    // The conversion notice, for the right person and without the text: the
+    // flash bar is on screen for anyone to read.
+    // seenMission here means "last told about", so the notice fires once, not
+    // on every tap for the rest of the turn.
+    const me = viewer();
+    if (me && me.mission) {
+      const last = seenMission[me.id];
+      if (last !== undefined && last !== me.mission.id) {
+        flash('Your objective changed \u2014 tap Mission to see the new one.');
+      }
+      seenMission[me.id] = me.mission.id;
+    }
+    return;
+  }
+
   const human = viewer();
   if (!human) {
     box.hidden = false;
@@ -6867,6 +6987,16 @@ function renderMission() {
   const converted = last !== undefined && last !== mission.id;
   seenMission[human.id] = mission.id;
 
+  $('mission').innerHTML = missionBody(human);
+
+  if (converted) {
+    flash('Your objective changed \u2014 ' + mission.text);
+  }
+}
+
+/** A mission card: the objective, how close you are, and what completing it means. */
+function missionBody(human) {
+  const mission = human.mission;
   const p = mission.progress(state, human.id);
   const complete = mission.check(state, human.id);
 
@@ -6881,15 +7011,10 @@ function renderMission() {
       '<span class="num">' + escapeHtml(detail) + '</span></div>';
   }).join('');
 
-  $('mission').innerHTML =
-    '<p class="mission-text">' + escapeHtml(mission.text) + '</p>' + rows +
+  return '<p class="mission-text">' + escapeHtml(mission.text) + '</p>' + rows +
     (complete
       ? '<p class="mission-note"><b>Objective complete.</b></p>'
       : '<p class="mission-note">Completing this wins the game outright.</p>');
-
-  if (converted) {
-    flash('Your objective changed \u2014 ' + mission.text);
-  }
 }
 
 function renderCards() {
@@ -7177,6 +7302,10 @@ function onKey(e) {
   // act on a turn nobody has picked up yet.
   if (coverFor) {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); liftHandoff(); }
+    return;
+  }
+  if (revealFor) {
+    if (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') { e.preventDefault(); hideMission(); }
     return;
   }
   const phase = state.turn.phase;

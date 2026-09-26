@@ -499,9 +499,22 @@ input[type=range]{width:100%;accent-color:var(--brass)}
 .log .rnd{font-family:var(--font-data);font-size:10px;color:var(--brass-dim);margin-right:6px}
 
 /* ---------- overlays ---------- */
+/* Centred with auto margins, not align-items:center. A flex container centres
+   an overflowing child by pushing the excess out of BOTH ends equally, and the
+   part above the top edge is outside the scroll range — no amount of scrolling
+   reaches it. On a phone the setup sheet is taller than the screen, so its top
+   (the title, and the People field) simply could not be reached: 136px of it in
+   portrait, 333px in landscape. Auto margins centre when there is room and
+   collapse to nothing when there is not, which keeps the top scrollable.
+   Padding clears the notch and home indicator: the page runs full-bleed under
+   a translucent status bar when installed. */
 .overlay{position:fixed;inset:0;background:var(--scrim);display:flex;
-  align-items:center;justify-content:center;padding:22px;z-index:50;overflow-y:auto}
+  align-items:flex-start;justify-content:center;z-index:50;
+  overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;
+  padding:max(22px, env(safe-area-inset-top)) max(22px, env(safe-area-inset-right))
+    max(22px, env(safe-area-inset-bottom)) max(22px, env(safe-area-inset-left))}
 .overlay[hidden]{display:none}
+.overlay > .sheet{margin:auto}
 .sheet{width:100%;max-width:520px;background:var(--ocean);
   border:1px solid var(--chart-line);padding:30px}
 .sheet h1{font-family:var(--font-map);font-size:30px;font-weight:700;
